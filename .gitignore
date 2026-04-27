@@ -1,0 +1,22 @@
+# Unreal Engine
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vscode/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Visual Studio
+.vs/
+ipch/
+*.VC.db
+*.VC.opendb
+*.pdb
+*.obj
+*.pch
+
+# Rider / JetBrains (nếu có)
+.idea/
