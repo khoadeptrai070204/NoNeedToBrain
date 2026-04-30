@@ -18,6 +18,7 @@ enum class ECombatState : uint8
 {
 	Idle			UMETA(DisplayName = "Idle"),
 	Attacking		UMETA(DisplayName = "Attacking"),
+	GrabAttempting	UMETA(DisplayName = "GrabAttempting"),  // dang play grab anim, chua biet trung hay miss
 	Grabbing		UMETA(DisplayName = "Grabbing"),
 	Throwing		UMETA(DisplayName = "Throwing"),
 	UsingUltimate	UMETA(DisplayName = "UsingUltimate"),
@@ -74,13 +75,32 @@ public:
 	void Notify_AttackFinished();
 
 	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
+	void Notify_KickHitWindowStart();
+
+	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
+	void Notify_KickHitWindowEnd();
+
+	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
+	void Notify_KickFinished();
+
+	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
 	void Notify_ThrowRelease();
 
 	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
 	void Notify_ThrowFinished();
 
 	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
+	void Notify_GrabAttempt();
+
+	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
+	void Notify_GrabFinished();
+
+	UFUNCTION(BlueprintCallable, Category = "Combat|Notifies")
 	void Notify_UltimateFinished();
+
+	/** Goi khi character bi hit tu ngoai - ngat moi action dang play (attack/kick/throw). */
+	UFUNCTION(BlueprintCallable, Category = "Combat")
+	void InterruptCombatAction();
 
 	// =========================================================
 	// Grab API
@@ -131,6 +151,7 @@ protected:
 	void Input_Ultimate(const FInputActionValue& Value);
 	void Input_SprintPressed(const FInputActionValue& Value);
 	void Input_SprintReleased(const FInputActionValue& Value);
+	void Input_Jump(const FInputActionValue& Value);
 
 	// ===== Rotation =====
 	void UpdateAimSources(float DeltaSeconds);
@@ -148,6 +169,10 @@ protected:
 	// ===== State entry/exit =====
 	void StartAttack();
 	void EndAttack();
+	void StartKick();
+	void EndKick();
+	void BeginGrabAttempt();
+	void EndGrabAttempt();
 	void StartGrab(ANBCharacter* Target);
 	void ReleaseGrab();
 	void StartThrow();
@@ -193,6 +218,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Input") TObjectPtr<UInputAction> IA_Grab = nullptr;
 	UPROPERTY(EditDefaultsOnly, Category = "Input") TObjectPtr<UInputAction> IA_Ultimate = nullptr;
 	UPROPERTY(EditDefaultsOnly, Category = "Input") TObjectPtr<UInputAction> IA_Sprint = nullptr;
+	UPROPERTY(EditDefaultsOnly, Category = "Input") TObjectPtr<UInputAction> IA_Jump = nullptr;
 
 	// =========================================================
 	// Rotation tuning
@@ -221,6 +247,18 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Movement", meta = (ClampMin = "0.1", ClampMax = "1.0"))
 	float GrabbedMoveSpeedMultiplier = 0.6f;
 
+	/** Van toc nhay len. Tang len 700 de co thoi gian dung kick combo. */
+	UPROPERTY(EditDefaultsOnly, Category = "Movement|Jump")
+	float JumpZVelocity = 700.f;
+
+	/** Gravity scale khi roi - giam de roi cham hon. */
+	UPROPERTY(EditDefaultsOnly, Category = "Movement|Jump")
+	float JumpGravityScale = 1.8f;
+
+	/** Air control - kha nang dieu khien khi tren khong (0=khong, 1=full). */
+	UPROPERTY(EditDefaultsOnly, Category = "Movement|Jump")
+	float JumpAirControl = 0.6f;
+
 	// =========================================================
 	// Attack tuning
 	// =========================================================
@@ -246,6 +284,34 @@ protected:
 	float AttackUpwardImpulse = 200.f;
 
 	// =========================================================
+	// Kick (jump kick - khi character tren khong + bam attack)
+	// =========================================================
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	TObjectPtr<UAnimMontage> KickMontage = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	float KickLockSeconds = 0.7f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	float KickHitRange = 130.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	float KickHitRadius = 90.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	float KickDamage = 25.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	float KickKnockbackImpulse = 1200.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	float KickUpwardImpulse = 400.f;
+
+	/** Luc bay toi truoc khi kick (jump kick Mario style). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Kick")
+	float KickForwardImpulse = 800.f;
+
+	// =========================================================
 	// Grab tuning
 	// =========================================================
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Grab")
@@ -259,6 +325,18 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Grab")
 	TObjectPtr<UAnimMontage> GrabMontage = nullptr;
+
+	/** Montage loop khi da bat duoc victim - giu lien tuc den khi tha. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Grab")
+	TObjectPtr<UAnimMontage> GrabHoldMontage = nullptr;
+
+	/** Montage play khi thả nạn nhân ra (animation Pull_End / GrabRelease). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Grab")
+	TObjectPtr<UAnimMontage> GrabReleaseMontage = nullptr;
+
+	/** Safety timeout neu Notify_GrabFinished khong fire. Match voi grab montage length. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Grab")
+	float GrabAttemptTimeout = 1.0f;
 
 	// =========================================================
 	// Throw tuning
@@ -327,6 +405,7 @@ private:
 
 	// ----- Hit window state -----
 	bool bAttackHitWindowOpen = false;
+	bool bIsKicking = false;  // phan biet damage/impulse trong DoAttackHitCheck
 	TArray<TWeakObjectPtr<AActor>> HitThisSwing;
 
 	// ----- Cooldowns -----

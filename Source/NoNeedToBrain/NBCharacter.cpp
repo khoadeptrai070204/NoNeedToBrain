@@ -47,6 +47,9 @@ void ANBCharacter::BeginPlay()
 	if (UCharacterMovementComponent* Mv = GetCharacterMovement())
 	{
 		Mv->MaxWalkSpeed = WalkSpeed;
+		Mv->JumpZVelocity = JumpZVelocity;
+		Mv->GravityScale = JumpGravityScale;
+		Mv->AirControl = JumpAirControl;
 	}
 	if (USkeletalMeshComponent* SkelMesh = GetMesh())
 	{
@@ -128,6 +131,10 @@ void ANBCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		EIC->BindAction(IA_Sprint, ETriggerEvent::Started, this, &ANBCharacter::Input_SprintPressed);
 		EIC->BindAction(IA_Sprint, ETriggerEvent::Completed, this, &ANBCharacter::Input_SprintReleased);
 	}
+	if (IA_Jump)
+	{
+		EIC->BindAction(IA_Jump, ETriggerEvent::Started, this, &ANBCharacter::Input_Jump);
+	}
 }
 
 // =========================================================
@@ -199,10 +206,11 @@ void ANBCharacter::Input_Move(const FInputActionValue& Value)
 	MoveInput = Value.Get<FVector2D>();
 	if (!Controller || !CanMove()) return;
 
-	const FRotator ControlRot = Controller->GetControlRotation();
-	const FRotator YawRot(0.f, ControlRot.Yaw, 0.f);
-	const FVector Forward = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
-	const FVector Right = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
+	// World-space input cho top-down game:
+	// W luôn đi về phía Y+ (forward world), không phụ thuộc hướng character đang nhìn.
+	// Điều này tránh glitch "đi theo cung tròn" khi character đang xoay theo aim.
+	const FVector Forward = FVector::ForwardVector;  // (1, 0, 0) world
+	const FVector Right = FVector::RightVector;    // (0, 1, 0) world
 
 	AddMovementInput(Forward, MoveInput.Y);
 	AddMovementInput(Right, MoveInput.X);
@@ -227,7 +235,28 @@ void ANBCharacter::Input_Attack(const FInputActionValue&)
 		TryThrow();
 		return;
 	}
-	TryStartAttack();
+
+	if (CombatState != ECombatState::Idle) return;
+
+	// Auto switch: tren khong = kick, mat dat = punch.
+	UCharacterMovementComponent* Mv = GetCharacterMovement();
+	if (Mv && Mv->IsFalling() && KickMontage)
+	{
+		StartKick();
+	}
+	else
+	{
+		StartAttack();
+	}
+}
+
+void ANBCharacter::Input_Jump(const FInputActionValue&)
+{
+	if (!CanAcceptInput()) return;
+	// Cho phep jump khi Idle hoac Grabbing (van giu duoc nan nhan khi nhay).
+	if (CombatState != ECombatState::Idle && CombatState != ECombatState::Grabbing) return;
+
+	Jump();  // ACharacter::Jump() built-in
 }
 
 void ANBCharacter::Input_GrabPressed(const FInputActionValue&)
@@ -370,6 +399,13 @@ void ANBCharacter::StartAttack()
 	CombatState = ECombatState::Attacking;
 	HitThisSwing.Reset();
 	bAttackHitWindowOpen = false;
+	bIsKicking = false;
+
+	// Stop velocity ngay lap tuc - dam bao character khong tiep tuc truot khi attack.
+	if (UCharacterMovementComponent* Mv = GetCharacterMovement())
+	{
+		Mv->StopMovementImmediately();
+	}
 
 	if (bHasAimYaw)
 	{
@@ -392,10 +428,157 @@ void ANBCharacter::StartAttack()
 void ANBCharacter::EndAttack()
 {
 	bAttackHitWindowOpen = false;
+	bIsKicking = false;
 	HitThisSwing.Reset();
 	if (CombatState == ECombatState::Attacking)
 	{
 		CombatState = ECombatState::Idle;
+	}
+}
+
+// =========================================================
+// Kick (jump kick)
+// =========================================================
+
+void ANBCharacter::StartKick()
+{
+	CombatState = ECombatState::Attacking;  // dung chung state Attacking de lock movement
+	HitThisSwing.Reset();
+	bAttackHitWindowOpen = false;
+	bIsKicking = true;
+
+	// Snap rotation theo aim.
+	if (bHasAimYaw)
+	{
+		if (AController* C = GetController())
+		{
+			C->SetControlRotation(FRotator(0.f, DesiredAimYaw, 0.f));
+		}
+	}
+
+	// Apply forward impulse + freeze in air neu dang tren khong (jump kick Mario style).
+	UCharacterMovementComponent* Mv = GetCharacterMovement();
+	if (Mv)
+	{
+		const bool bWasFalling = Mv->IsFalling();
+
+		// Forward impulse - bay toi truoc (chi neu KickForwardImpulse > 0).
+		if (KickForwardImpulse > 0.f)
+		{
+			const FVector ForwardImpulse = GetActorForwardVector() * KickForwardImpulse;
+			Mv->AddImpulse(ForwardImpulse, true);
+		}
+
+		// Neu dang tren khong, freeze gravity + cat het momentum de character dung yen khi kick.
+		if (bWasFalling)
+		{
+			Mv->GravityScale = 0.f;
+			// Cat het velocity (X, Y, Z) - khong giu momentum khi kick.
+			Mv->Velocity = FVector::ZeroVector;
+		}
+	}
+
+	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+	{
+		if (KickMontage) Anim->Montage_Play(KickMontage);
+	}
+
+	GetWorldTimerManager().ClearTimer(Timer_AttackLock);
+	GetWorldTimerManager().SetTimer(
+		Timer_AttackLock, this, &ANBCharacter::EndKick, KickLockSeconds, false);
+}
+
+void ANBCharacter::EndKick()
+{
+	bAttackHitWindowOpen = false;
+	bIsKicking = false;
+	HitThisSwing.Reset();
+
+	// Restore gravity - character bat dau roi xuong tu vi tri kick.
+	if (UCharacterMovementComponent* Mv = GetCharacterMovement())
+	{
+		Mv->GravityScale = JumpGravityScale;
+	}
+
+	if (CombatState == ECombatState::Attacking)
+	{
+		CombatState = ECombatState::Idle;
+	}
+}
+
+void ANBCharacter::Notify_KickHitWindowStart()
+{
+	if (CombatState != ECombatState::Attacking || !bIsKicking) return;
+	bAttackHitWindowOpen = true;
+	HitThisSwing.Reset();
+}
+
+void ANBCharacter::Notify_KickHitWindowEnd()
+{
+	bAttackHitWindowOpen = false;
+}
+
+void ANBCharacter::Notify_KickFinished()
+{
+	GetWorldTimerManager().ClearTimer(Timer_AttackLock);
+	EndKick();
+}
+
+// =========================================================
+// Interrupt - khi bi hit luc dang attack/kick/throw thi cancel
+// =========================================================
+
+void ANBCharacter::InterruptCombatAction()
+{
+	// Khong interrupt neu da Stunned/Dead/Ragdoll - de logic khac handle.
+	if (CombatState == ECombatState::Stunned ||
+		CombatState == ECombatState::Dead ||
+		bIsRagdoll)
+	{
+		return;
+	}
+
+	// Stop tat ca montage dang play.
+	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+	{
+		Anim->StopAllMontages(0.15f);  // blend out 0.15s cho do giat
+	}
+
+	// Clear timers.
+	GetWorldTimerManager().ClearTimer(Timer_AttackLock);
+	GetWorldTimerManager().ClearTimer(Timer_ThrowLock);
+
+	// Neu dang grab ai do thi tha ra.
+	if (GrabbedCharacter.IsValid())
+	{
+		ReleaseGrab();
+	}
+
+	// Neu dang kick (gravity = 0) thi restore gravity de roi xuong.
+	if (bIsKicking)
+	{
+		if (UCharacterMovementComponent* Mv = GetCharacterMovement())
+		{
+			Mv->GravityScale = JumpGravityScale;
+		}
+	}
+
+	// Reset hit window state.
+	bAttackHitWindowOpen = false;
+	bIsKicking = false;
+	HitThisSwing.Reset();
+
+	// Reset state ve Idle (chi khi dang trong combat action).
+	switch (CombatState)
+	{
+	case ECombatState::Attacking:
+	case ECombatState::Throwing:
+	case ECombatState::UsingUltimate:
+	case ECombatState::GrabAttempting:
+		CombatState = ECombatState::Idle;
+		break;
+	default:
+		break;
 	}
 }
 
@@ -422,8 +605,15 @@ void ANBCharacter::DoAttackHitCheck()
 	UWorld* World = GetWorld();
 	if (!World) return;
 
-	const FVector Start = GetActorLocation() + GetActorForwardVector() * AttackHitRange * 0.5f;
-	FCollisionShape Shape = FCollisionShape::MakeSphere(AttackHitRadius);
+	// Range/radius khac nhau cho kick va punch.
+	const float HitRange = bIsKicking ? KickHitRange : AttackHitRange;
+	const float HitRadius = bIsKicking ? KickHitRadius : AttackHitRadius;
+	const float Damage = bIsKicking ? KickDamage : AttackDamage;
+	const float Knockback = bIsKicking ? KickKnockbackImpulse : AttackKnockbackImpulse;
+	const float Upward = bIsKicking ? KickUpwardImpulse : AttackUpwardImpulse;
+
+	const FVector Start = GetActorLocation() + GetActorForwardVector() * HitRange * 0.5f;
+	FCollisionShape Shape = FCollisionShape::MakeSphere(HitRadius);
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(NB_AttackHit), false, this);
 	Params.AddIgnoredActor(this);
 
@@ -445,15 +635,24 @@ void ANBCharacter::DoAttackHitCheck()
 
 		if (ANBCharacter* Other = Cast<ANBCharacter>(A))
 		{
+			// Neu victim dang trong combat action (Attack/Kick/Throw/Ulti/GrabAttempt) - ngat hanh dong.
+			if (Other->CombatState == ECombatState::Attacking ||
+				Other->CombatState == ECombatState::Throwing ||
+				Other->CombatState == ECombatState::UsingUltimate ||
+				Other->CombatState == ECombatState::GrabAttempting)
+			{
+				Other->InterruptCombatAction();
+			}
+
 			if (Other->HealthComp)
 			{
-				Other->HealthComp->ApplyDamage(AttackDamage, this);
+				Other->HealthComp->ApplyDamage(Damage, this);
 			}
 
 			FVector Push = Other->GetActorLocation() - GetActorLocation();
 			Push.Z = 0.f;
 			Push = Push.GetSafeNormal();
-			const FVector Impulse = Push * AttackKnockbackImpulse + FVector::UpVector * AttackUpwardImpulse;
+			const FVector Impulse = Push * Knockback + FVector::UpVector * Upward;
 
 			if (UCharacterMovementComponent* Mv = Other->GetCharacterMovement())
 			{
@@ -474,13 +673,70 @@ void ANBCharacter::DoAttackHitCheck()
 
 void ANBCharacter::TryStartGrab()
 {
+	// Cho phep grab khi Idle. Animation luon play, target check sau o notify GrabAttempt.
 	if (CombatState != ECombatState::Idle) return;
+
+	BeginGrabAttempt();
+}
+
+void ANBCharacter::BeginGrabAttempt()
+{
+	CombatState = ECombatState::GrabAttempting;
+
+	// Stop velocity ngay - khoa movement trong khi grab anim play.
+	if (UCharacterMovementComponent* Mv = GetCharacterMovement())
+	{
+		Mv->StopMovementImmediately();
+	}
+
+	// Snap rotation theo aim de grab dung huong.
+	if (bHasAimYaw)
+	{
+		if (AController* C = GetController())
+		{
+			C->SetControlRotation(FRotator(0.f, DesiredAimYaw, 0.f));
+		}
+	}
+
+	// Play grab montage NGAY - du chua biet trung hay miss.
+	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+	{
+		if (GrabMontage) Anim->Montage_Play(GrabMontage);
+	}
+
+	// Safety timer - neu Notify_GrabFinished khong fire thi tu reset Idle.
+	GetWorldTimerManager().ClearTimer(Timer_AttackLock);
+	GetWorldTimerManager().SetTimer(
+		Timer_AttackLock, this, &ANBCharacter::EndGrabAttempt, GrabAttemptTimeout, false);
+}
+
+void ANBCharacter::EndGrabAttempt()
+{
+	// Chi reset neu van dang GrabAttempting (chua trung target).
+	if (CombatState == ECombatState::GrabAttempting)
+	{
+		CombatState = ECombatState::Idle;
+	}
+}
+
+void ANBCharacter::Notify_GrabAttempt()
+{
+	// Active frame - bay gio moi check target.
+	if (CombatState != ECombatState::GrabAttempting) return;
 
 	ANBCharacter* Target = nullptr;
 	if (FindGrabTarget(Target) && Target)
 	{
+		// Trung target - chuyen sang Grabbing state, attach victim.
 		StartGrab(Target);
 	}
+	// Khong trung - khong lam gi, animation tiep tuc play den het.
+}
+
+void ANBCharacter::Notify_GrabFinished()
+{
+	GetWorldTimerManager().ClearTimer(Timer_AttackLock);
+	EndGrabAttempt();
 }
 
 bool ANBCharacter::FindGrabTarget(ANBCharacter*& OutTarget) const
@@ -518,6 +774,9 @@ void ANBCharacter::StartGrab(ANBCharacter* Target)
 {
 	if (!Target) return;
 
+	// Stop safety timer cua grab attempt - victim da bat duoc.
+	GetWorldTimerManager().ClearTimer(Timer_AttackLock);
+
 	CombatState = ECombatState::Grabbing;
 	GrabbedCharacter = Target;
 	Target->OnGrabbedBy(this);
@@ -525,11 +784,19 @@ void ANBCharacter::StartGrab(ANBCharacter* Target)
 	const FAttachmentTransformRules Rules(EAttachmentRule::SnapToTarget, EAttachmentRule::SnapToTarget, EAttachmentRule::KeepWorld, true);
 	Target->AttachToComponent(GetMesh(), Rules, GrabSocketName);
 
-	// Speed sẽ tự update trong Tick → UpdateMovementSpeed.
+	// Speed se tu update trong Tick → UpdateMovementSpeed.
 
+	// Stop grab attempt montage, play hold montage (loop).
 	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
 	{
-		if (GrabMontage) Anim->Montage_Play(GrabMontage);
+		if (GrabMontage && Anim->Montage_IsPlaying(GrabMontage))
+		{
+			Anim->Montage_Stop(0.1f, GrabMontage);
+		}
+		if (GrabHoldMontage)
+		{
+			Anim->Montage_Play(GrabHoldMontage);
+		}
 	}
 }
 
@@ -541,6 +808,19 @@ void ANBCharacter::ReleaseGrab()
 		V->OnReleasedBy(this, false, FVector::ZeroVector);
 	}
 	GrabbedCharacter = nullptr;
+
+	// Stop GrabHoldMontage dang loop, play release montage.
+	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+	{
+		if (GrabHoldMontage && Anim->Montage_IsPlaying(GrabHoldMontage))
+		{
+			Anim->Montage_Stop(0.15f, GrabHoldMontage);
+		}
+		if (GrabReleaseMontage)
+		{
+			Anim->Montage_Play(GrabReleaseMontage);
+		}
+	}
 
 	if (CombatState == ECombatState::Grabbing)
 	{
@@ -812,9 +1092,16 @@ void ANBCharacter::UpdateAnimSync(float)
 	const FVector Planar(Vel.X, Vel.Y, 0.f);
 	Speed = Planar.Size();
 
+	// DEBUG: in ra Speed mỗi frame để verify update.
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			1, 0.f, FColor::Yellow,
+			FString::Printf(TEXT("[C++] Speed=%.1f  Vel=(%.0f,%.0f,%.0f)"),
+				Speed, Vel.X, Vel.Y, Vel.Z));
+	}
+
 	// Tự tính direction angle (-180..180) bằng dot product.
-	// Forward dot → thành phần "trước/sau", Right dot → thành phần "trái/phải".
-	// Atan2(Right, Forward) cho ra góc tiêu chuẩn cho BlendSpace Direction.
 	if (Speed > 1.f)
 	{
 		const FVector VelDir = Planar.GetSafeNormal();
