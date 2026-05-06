@@ -1533,3 +1533,14 @@ void ANBCharacter::Multicast_PlayMontage_Implementation(UAnimMontage* Montage)
 		Anim->Montage_Play(Montage);
 	}
 }
+
+void ANBCharacter::Multicast_PlayMontageForced_Implementation(UAnimMontage* Montage)
+{
+	// Khong skip owner - dung cho Ultimate va action khong client-side predict.
+	if (!Montage) return;
+
+	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+	{
+		Anim->Montage_Play(Montage);
+	}
+}

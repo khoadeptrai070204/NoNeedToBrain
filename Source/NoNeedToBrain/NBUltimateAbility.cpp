@@ -47,13 +47,9 @@ void UNBUltimateAbility::PlayMontageAndArmFallback(ANBCharacter* Caster)
 
 	if (Montage)
 	{
-		if (USkeletalMeshComponent* Mesh = Caster->GetMesh())
-		{
-			if (UAnimInstance* Anim = Mesh->GetAnimInstance())
-			{
-				Anim->Montage_Play(Montage);
-			}
-		}
+		// Dung Multicast Forced de play montage tren TAT CA clients (server + clients + owner).
+		// Khong skip owner vi Ultimate khong co client-side prediction.
+		Caster->Multicast_PlayMontageForced(Montage);
 	}
 
 	if (FallbackDuration > 0.f)

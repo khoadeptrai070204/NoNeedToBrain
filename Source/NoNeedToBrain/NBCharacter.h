@@ -193,6 +193,14 @@ public:
 
 	void AddRage(float Amount);
 
+	/** Multicast play montage tren tat ca clients - public de Ultimate Ability goi duoc. */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayMontage(UAnimMontage* Montage);
+
+	/** Multicast play montage tren tat ca clients KHONG SKIP owner (cho Ultimate va action khong client-predict). */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayMontageForced(UAnimMontage* Montage);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
@@ -231,9 +239,6 @@ protected:
 	void Server_UpdateAim(float NewYaw);
 
 	// ===== Multicast RPCs (server → all clients) for visual effects =====
-	UFUNCTION(NetMulticast, Reliable)
-	void Multicast_PlayMontage(UAnimMontage* Montage);
-
 	/** Multicast ragdoll state change. bEnable=true: enter ragdoll. bEnable=false: exit ragdoll. */
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_SetRagdoll(bool bEnable, FVector InitialImpulse);
