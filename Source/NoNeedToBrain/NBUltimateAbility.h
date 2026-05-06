@@ -2,9 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
+#include "NBCharacter.h"
 #include "NBUltimateAbility.generated.h"
 
-class ANBCharacter;
 class UAnimMontage;
 
 /**

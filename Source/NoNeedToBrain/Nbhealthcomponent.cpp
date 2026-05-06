@@ -1,9 +1,23 @@
 #include "NBHealthComponent.h"
 #include "Engine/World.h"
+#include "Net/UnrealNetwork.h"
 
 UNBHealthComponent::UNBHealthComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+	SetIsReplicatedByDefault(true);
+}
+
+void UNBHealthComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UNBHealthComponent, CurrentHealth);
+	DOREPLIFETIME(UNBHealthComponent, bIsDead);
+}
+
+void UNBHealthComponent::OnRep_CurrentHealth()
+{
+	OnHealthChanged.Broadcast(CurrentHealth, MaxHealth, nullptr);
 }
 
 void UNBHealthComponent::BeginPlay()
@@ -15,6 +29,10 @@ void UNBHealthComponent::BeginPlay()
 
 void UNBHealthComponent::ApplyDamage(float Amount, AActor* Instigator)
 {
+	// Server-authoritative: chi server moi modify CurrentHealth.
+	// Client se tu sync qua OnRep_CurrentHealth.
+	if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+
 	if (bIsDead || Amount <= 0.f) return;
 
 	// Chặn multi-hit từ cùng 1 đòn (sphere overlap có thể trùng frame).

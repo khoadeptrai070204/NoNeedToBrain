@@ -1,0 +1,49 @@
+# Autonomix Ignore File
+# Uses .gitignore syntax. Files matching these patterns will be hidden from the AI.
+# Edit this file to customize AI access to your project files.
+
+# -----------------------------------------------------------------------
+# Binary Unreal assets -- never send to AI (binary blobs, not human-readable)
+# -----------------------------------------------------------------------
+*.uasset
+*.umap
+*.pak
+*.sig
+*.ucas
+*.utoc
+
+# -----------------------------------------------------------------------
+# Build artifacts
+# -----------------------------------------------------------------------
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+
+# -----------------------------------------------------------------------
+# IDE and solution files
+# -----------------------------------------------------------------------
+.vs/
+.idea/
+*.sln
+*.suo
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# -----------------------------------------------------------------------
+# Package manager caches
+# -----------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+
+# -----------------------------------------------------------------------
+# Large generated/cached data
+# -----------------------------------------------------------------------
+ShaderCache/
+*.bin
+*.pdb
+*.exp
+*.lib
+*.dll
+*.exe

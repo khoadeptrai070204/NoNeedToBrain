@@ -21,14 +21,19 @@ class NONEEDTOBRAIN_API UNBHealthComponent : public UActorComponent
 public:
 	UNBHealthComponent();
 
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Health")
 	float MaxHealth = 100.f;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Health")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, ReplicatedUsing = OnRep_CurrentHealth, Category = "Health")
 	float CurrentHealth = 100.f;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Health")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Replicated, Category = "Health")
 	bool bIsDead = false;
+
+	UFUNCTION()
+	void OnRep_CurrentHealth();
 
 	/** Số giây bất tử ngay sau khi nhận damage (chống multi-hit cùng đòn). */
 	UPROPERTY(EditDefaultsOnly, Category = "Health")

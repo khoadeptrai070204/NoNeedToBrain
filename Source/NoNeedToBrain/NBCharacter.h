@@ -34,6 +34,7 @@ class NONEEDTOBRAIN_API ANBCharacter : public ACharacter
 public:
 	ANBCharacter();
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// =========================================================
 	// Public state queries
@@ -61,6 +62,34 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Combat")
 	FVector GetAimDirectionWorld() const;
+
+	// =========================================================
+	// AI public API - cho AI Controller goi
+	// =========================================================
+	UFUNCTION(BlueprintCallable, Category = "AI")
+	void PerformAIAttack();
+
+	UFUNCTION(BlueprintCallable, Category = "AI")
+	void PerformAIGrab();
+
+	UFUNCTION(BlueprintCallable, Category = "AI")
+	void PerformAIThrow();
+
+	/** AI face target - snap rotation about target. */
+	UFUNCTION(BlueprintCallable, Category = "AI")
+	void AIFaceTarget(AActor* Target);
+
+	/** AI bat/tat sprint. Service tu goi based on distance. */
+	UFUNCTION(BlueprintCallable, Category = "AI")
+	void SetAISprinting(bool bSprint);
+
+	/** AI jump - call Jump() built-in cua ACharacter. */
+	UFUNCTION(BlueprintCallable, Category = "AI")
+	void PerformAIJump();
+
+	/** Auto-pair: class enemy character (BP_Hero_Big set la BP_Hero_Small va vice versa). */
+	UPROPERTY(EditDefaultsOnly, Category = "AI")
+	TSubclassOf<ANBCharacter> EnemyPairClass;
 
 	// =========================================================
 	// AnimNotify hooks
@@ -121,22 +150,48 @@ public:
 	bool IsRagdolling() const { return bIsRagdoll; }
 
 	// =========================================================
-	// Public anim/state
+	// Public anim/state (REPLICATED for multiplayer)
 	// =========================================================
-	UPROPERTY(BlueprintReadOnly, Category = "Anim")
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Anim")
 	float Speed = 0.f;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Anim")
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Anim")
 	float Direction = 0.f;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Combat")
 	ECombatState CombatState = ECombatState::Idle;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Combat")
 	bool bIsGrabbed = false;
 
-	UPROPERTY(BlueprintReadOnly, Category = "Combat")
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Combat")
 	bool bIsRagdoll = false;
+
+	/** Rage gauge (0-100). Tang khi danh/bi danh. Day = duoc dung Ultimate. */
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Combat|Ultimate")
+	float RageGauge = 0.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ultimate")
+	float RageMax = 100.f;
+
+	/** Rage gain khi danh trung doi thu. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ultimate")
+	float RageGainOnHit = 10.f;
+
+	/** Rage gain khi bi danh trung. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ultimate")
+	float RageGainOnTakeDamage = 15.f;
+
+	UFUNCTION(BlueprintPure, Category = "Combat|Ultimate")
+	float GetRagePercent() const { return RageGauge / FMath::Max(1.f, RageMax); }
+
+	UFUNCTION(BlueprintPure, Category = "Combat|Ultimate")
+	bool IsRageReady() const { return RageGauge >= RageMax; }
+
+	UFUNCTION(BlueprintPure, Category = "Combat")
+	UNBHealthComponent* GetHealthComp() const { return HealthComp; }
+
+	void AddRage(float Amount);
 
 protected:
 	virtual void BeginPlay() override;
@@ -152,6 +207,40 @@ protected:
 	void Input_SprintPressed(const FInputActionValue& Value);
 	void Input_SprintReleased(const FInputActionValue& Value);
 	void Input_Jump(const FInputActionValue& Value);
+
+	// ===== Server RPCs (client → server) =====
+	UFUNCTION(Server, Reliable)
+	void Server_RequestAttack();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestGrab();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestRelease();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestUltimate();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestJump();
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetSprinting(bool bSprint);
+
+	UFUNCTION(Server, Reliable)
+	void Server_UpdateAim(float NewYaw);
+
+	// ===== Multicast RPCs (server → all clients) for visual effects =====
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayMontage(UAnimMontage* Montage);
+
+	/** Multicast ragdoll state change. bEnable=true: enter ragdoll. bEnable=false: exit ragdoll. */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_SetRagdoll(bool bEnable, FVector InitialImpulse);
+
+	/** Multicast grabbed state - disable/enable mesh+movement on all clients. */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_SetGrabbedState(bool bGrabbed);
 
 	// ===== Rotation =====
 	void UpdateAimSources(float DeltaSeconds);
@@ -283,6 +372,18 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Attack")
 	float AttackUpwardImpulse = 200.f;
 
+	/** Thoi gian sau StartAttack -> tu trigger hit check (bypass notify AnimBP). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Attack")
+	float AttackHitDelay = 0.2f;
+
+	/** Thoi gian sau hit check -> tu dong end hit window. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Attack")
+	float AttackHitWindowDuration = 0.15f;
+
+	/** Montage play tren victim khi an punch. Doi voi punch, dung de tao hit feedback (thay knockback). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Attack")
+	TObjectPtr<UAnimMontage> HitReactionMontage = nullptr;
+
 	// =========================================================
 	// Kick (jump kick - khi character tren khong + bam attack)
 	// =========================================================
@@ -338,6 +439,11 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Grab")
 	float GrabAttemptTimeout = 1.0f;
 
+	/** Thoi gian sau BeginGrabAttempt → tu trigger Notify_GrabAttempt (active frame).
+	 *  Bypass notify trong AnimBP. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Grab")
+	float GrabAttemptDelay = 0.3f;
+
 	// =========================================================
 	// Throw tuning
 	// =========================================================
@@ -345,10 +451,15 @@ protected:
 	float ThrowImpulse = 1500.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Throw")
-	float ThrowUpwardImpulse = 400.f;
+	float ThrowUpwardImpulse = 100.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Throw")
 	float ThrowLockSeconds = 0.5f;
+
+	/** Thoi gian sau StartThrow → tu trigger ThrowRelease (detach + impulse).
+	 *  Bypass notify trong AnimBP (de chac chan throw work). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Throw")
+	float ThrowReleaseDelay = 0.05f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Throw")
 	TObjectPtr<UAnimMontage> ThrowMontage = nullptr;
@@ -357,7 +468,15 @@ protected:
 	// Ragdoll tuning
 	// =========================================================
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ragdoll")
-	float RagdollDuration = 1.5f;
+	float RagdollDuration = 3.0f;
+
+	/** Min duration ragdoll de tranh exit qua nhanh (vd victim bay len roi xuong dat ngay). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ragdoll")
+	float RagdollMinDuration = 0.8f;
+
+	/** Velocity threshold de detect "settled" (cham dat va dung lai). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ragdoll")
+	float RagdollSettleVelocityThreshold = 50.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ragdoll")
 	FName RagdollPelvisBone = TEXT("pelvis");
@@ -394,7 +513,13 @@ private:
 	// ----- Timers -----
 	FTimerHandle Timer_AttackLock;
 	FTimerHandle Timer_ThrowLock;
+	FTimerHandle Timer_ThrowRelease;
+	FTimerHandle Timer_GrabAttempt;
+	FTimerHandle Timer_AttackHitWindow;
 	FTimerHandle Timer_RagdollRecover;
+
+	/** Time stamp ragdoll started - de tinh min duration. */
+	float RagdollEnterTime = 0.f;
 
 	// ----- Grab refs -----
 	UPROPERTY()
