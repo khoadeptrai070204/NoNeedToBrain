@@ -192,5 +192,23 @@ void ANBGameMode::CheckWinCondition()
 
 		UE_LOG(LogTemp, Warning, TEXT("[GameMode] Game ended! Winner: %s"),
 			LastAlive ? *LastAlive->GetName() : TEXT("None (Draw)"));
+
+		// =========================================================
+		// Gui Client_ShowEndScreen RPC toi tat ca PlayerControllers.
+		// Server quyet dinh ai win/lose dua tren PC's Pawn == WinnerActor.
+		// =========================================================
+		for (FConstPlayerControllerIterator It2 = GetWorld()->GetPlayerControllerIterator(); It2; ++It2)
+		{
+			ANBPlayerController* NBPC = Cast<ANBPlayerController>(It2->Get());
+			if (!NBPC) continue;
+
+			// Kiem tra Pawn cua PC nay co phai winner khong.
+			const bool bIsWinner = (WinnerActor != nullptr && NBPC->GetPawn() == WinnerActor);
+
+			UE_LOG(LogTemp, Warning, TEXT("[GameMode] -> PC %s: bIsWinner=%s"),
+				*NBPC->GetName(), bIsWinner ? TEXT("true") : TEXT("false"));
+
+			NBPC->Client_ShowEndScreen(bIsWinner);
+		}
 	}
 }

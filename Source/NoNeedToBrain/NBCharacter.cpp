@@ -54,6 +54,7 @@ void ANBCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ANBCharacter, CombatState);
 	DOREPLIFETIME(ANBCharacter, bIsGrabbed);
 	DOREPLIFETIME(ANBCharacter, bIsRagdoll);
+	DOREPLIFETIME(ANBCharacter, bIsFallStunned);
 	DOREPLIFETIME(ANBCharacter, RageGauge);
 }
 
@@ -948,6 +949,8 @@ bool ANBCharacter::FindGrabTarget(ANBCharacter*& OutTarget) const
 		ANBCharacter* C = Cast<ANBCharacter>(O.GetActor());
 		if (!C || C == this) continue;
 		if (C->bIsGrabbed || C->bIsRagdoll || C->CombatState == ECombatState::Dead) continue;
+		// Khong cho grab khi target dang stun (sau khi bi throw, dang dap mat / dung day).
+		if (C->bIsFallStunned || C->CombatState == ECombatState::Stunned) continue;
 
 		const float D = FVector::DistSquared(GetActorLocation(), C->GetActorLocation());
 		if (D < BestDist)
@@ -1100,7 +1103,23 @@ void ANBCharacter::Notify_ThrowRelease()
 		VMv->AddImpulse(Impulse, true);
 	}
 
-	V->CombatState = ECombatState::Idle;
+	// Apply damage server-side.
+	if (HasAuthority() && ThrowDamage > 0.f && V->GetHealthComp())
+	{
+		V->GetHealthComp()->ApplyDamage(ThrowDamage, this);
+	}
+
+	// Neu victim chet do throw damage -> HandleDeath se chuyen sang ragdoll, skip stun.
+	if (V->GetHealthComp() && !V->GetHealthComp()->IsAlive())
+	{
+		V->CombatState = ECombatState::Dead;
+	}
+	else
+	{
+		// Mark victim stunned trong khi bay. Khi Land() se trigger FallFaceMontage.
+		V->StartThrowFallStun();
+	}
+
 	GrabbedCharacter = nullptr;
 }
 
@@ -1542,5 +1561,101 @@ void ANBCharacter::Multicast_PlayMontageForced_Implementation(UAnimMontage* Mont
 	if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
 	{
 		Anim->Montage_Play(Montage);
+	}
+}
+
+// =========================================================
+// Throw Fall + GetUp flow
+// =========================================================
+
+void ANBCharacter::StartThrowFallStun()
+{
+	// Server-only: set state stun + flag falling. Khi Landed() fire se trigger FallFace.
+	if (!HasAuthority()) return;
+
+	bIsFallStunned = true;
+	CombatState = ECombatState::Stunned;
+
+	UE_LOG(LogTemp, Log, TEXT("[NBCharacter] %s start fall stun (airborne)"), *GetName());
+}
+
+void ANBCharacter::Landed(const FHitResult& Hit)
+{
+	Super::Landed(Hit);
+
+	// Server-only: chi server quyet dinh chain montage.
+	if (!HasAuthority()) return;
+	if (!bIsFallStunned) return;
+
+	// Safety: neu da chet hoac ragdoll thi skip (HandleDeath da xu ly).
+	if (bIsRagdoll) return;
+	if (HealthComp && !HealthComp->IsAlive()) return;
+
+	UE_LOG(LogTemp, Log, TEXT("[NBCharacter] %s landed -> play FallFace"), *GetName());
+
+	// Stop horizontal velocity de victim khong truot xa.
+	if (UCharacterMovementComponent* Mv = GetCharacterMovement())
+	{
+		Mv->StopMovementImmediately();
+	}
+
+	// Play FallFace (multicast forced - khong skip owner vi victim dang stun).
+	if (FallFaceMontage)
+	{
+		Multicast_PlayMontageForced(FallFaceMontage);
+
+		// Bind BlendingOut delegate (KHONG dung End delegate).
+		// BlendingOut fire khi montage BAT DAU blend out -> ta start GetUp luon
+		// -> 2 montage crossfade thay vi co gap idle pose o giua.
+		if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+		{
+			FOnMontageBlendingOutStarted BlendOutDelegate;
+			BlendOutDelegate.BindUObject(this, &ANBCharacter::OnFallFaceMontageBlendOut);
+			Anim->Montage_SetBlendingOutDelegate(BlendOutDelegate, FallFaceMontage);
+		}
+	}
+	else
+	{
+		// Khong co FallFace -> chain straight to GetUp.
+		OnFallFaceMontageBlendOut(nullptr, false);
+	}
+}
+
+void ANBCharacter::OnFallFaceMontageBlendOut(UAnimMontage* Montage, bool bInterrupted)
+{
+	if (!HasAuthority()) return;
+	if (!bIsFallStunned) return;
+
+	UE_LOG(LogTemp, Log, TEXT("[NBCharacter] %s FallFace blend-out -> play GetUp"), *GetName());
+
+	if (GetUpMontage)
+	{
+		Multicast_PlayMontageForced(GetUpMontage);
+
+		// GetUp dung End delegate vi sau no minh muon ve Idle thuc su, khong chain tiep.
+		if (UAnimInstance* Anim = GetMesh() ? GetMesh()->GetAnimInstance() : nullptr)
+		{
+			FOnMontageEnded EndDelegate;
+			EndDelegate.BindUObject(this, &ANBCharacter::OnGetUpMontageEnded);
+			Anim->Montage_SetEndDelegate(EndDelegate, GetUpMontage);
+		}
+	}
+	else
+	{
+		// Khong co GetUp -> reset Idle ngay.
+		OnGetUpMontageEnded(nullptr, false);
+	}
+}
+
+void ANBCharacter::OnGetUpMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+	if (!HasAuthority()) return;
+
+	UE_LOG(LogTemp, Log, TEXT("[NBCharacter] %s GetUp ended -> back to Idle"), *GetName());
+
+	bIsFallStunned = false;
+	if (CombatState == ECombatState::Stunned)
+	{
+		CombatState = ECombatState::Idle;
 	}
 }

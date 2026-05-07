@@ -167,6 +167,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Combat")
 	bool bIsRagdoll = false;
 
+	/** True khi vua bi throw va dang bay (cho den khi Land trigger fall montage). */
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Combat")
+	bool bIsFallStunned = false;
+
 	/** Rage gauge (0-100). Tang khi danh/bi danh. Day = duoc dung Ultimate. */
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Combat|Ultimate")
 	float RageGauge = 0.f;
@@ -284,6 +288,21 @@ protected:
 
 	UFUNCTION()
 	void HandleDeath(AActor* Killer);
+
+	// ===== Fall + Get Up flow (sau khi bi throw) =====
+	/** Server-only: goi tu Notify_ThrowRelease, mark victim de Landed() trigger fall montage. */
+	void StartThrowFallStun();
+
+	/** Server-only: callback khi FallFaceMontage BAT DAU blend out -> chain qua GetUp luon (tranh flash idle). */
+	UFUNCTION()
+	void OnFallFaceMontageBlendOut(UAnimMontage* Montage, bool bInterrupted);
+
+	/** Server-only: callback khi GetUpMontage end, reset state ve Idle. */
+	UFUNCTION()
+	void OnGetUpMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/** Override: detect khi character cham dat (Landing) de trigger FallFace. */
+	virtual void Landed(const FHitResult& Hit) override;
 
 	// ===== Anim sync =====
 	void UpdateAnimSync(float DeltaSeconds);
@@ -460,6 +479,14 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Throw")
 	float ThrowLockSeconds = 0.5f;
+
+	/** Damage gay cho nan nhan khi bi throw (apply ngay luc release). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Throw")
+	float ThrowDamage = 25.f;
+
+	/** Animation roi dap mat khi nan nhan cham dat sau bi throw. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Throw")
+	TObjectPtr<UAnimMontage> FallFaceMontage = nullptr;
 
 	/** Thoi gian sau StartThrow → tu trigger ThrowRelease (detach + impulse).
 	 *  Bypass notify trong AnimBP (de chac chan throw work). */
