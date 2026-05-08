@@ -21,6 +21,10 @@
 #include "Net/UnrealNetwork.h"
 #include "Engine/OverlapResult.h"
 #include "TimerManager.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "Sound/SoundBase.h"
+#include "Kismet/GameplayStatics.h"
 
 ANBCharacter::ANBCharacter()
 {
@@ -801,6 +805,26 @@ void ANBCharacter::DoAttackHitCheck()
 			AddRage(RageGainOnHit);
 			Other->AddRage(Other->RageGainOnTakeDamage);
 
+			// Spawn impact FX + sound tai vi tri va cham (giua attacker va victim).
+			// Server-authoritative: chi server multicast, client se nhan + spawn local.
+			if (HasAuthority())
+			{
+				const FVector ImpactLocation = (GetActorLocation() + Other->GetActorLocation()) * 0.5f
+					+ FVector(0.f, 0.f, 50.f); // raise len 1 chut cho FX o tam nguc thay vi chan
+				UNiagaraSystem* FX = bIsKicking ? KickHitFX : PunchHitFX;
+				USoundBase* HitSnd = bIsKicking ? KickHitSound : PunchHitSound;
+				if (FX || HitSnd)
+				{
+					Multicast_SpawnImpactFX(FX, HitSnd, ImpactLocation);
+				}
+
+				// Victim phat get-hit sound (sound cua victim, vi sound khac nhau theo character).
+				if (Other->GetHitSound)
+				{
+					Other->Multicast_SpawnImpactFX(nullptr, Other->GetHitSound, Other->GetActorLocation());
+				}
+			}
+
 			// Punch: hit reaction.
 			// Kick: knockback (day bay) - khong ragdoll.
 			if (bIsKicking)
@@ -1564,6 +1588,52 @@ void ANBCharacter::Multicast_PlayMontageForced_Implementation(UAnimMontage* Mont
 	}
 }
 
+void ANBCharacter::Multicast_SpawnImpactFX_Implementation(UNiagaraSystem* FX, USoundBase* Sound, FVector Location)
+{
+	// Chay tren tat ca clients + server (Listen Server tu thay).
+	UWorld* World = GetWorld();
+	if (!World) return;
+
+	// Skip dedicated server (khong can render FX ben no, client da nhan multicast roi).
+	if (World->GetNetMode() == NM_DedicatedServer) return;
+
+	if (FX)
+	{
+		UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+			World, FX, Location, FRotator::ZeroRotator,
+			FVector(1.f), true, true, ENCPoolMethod::AutoRelease);
+	}
+
+	if (Sound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(World, Sound, Location);
+	}
+}
+
+// =========================================================
+// Sound helpers
+// =========================================================
+
+void ANBCharacter::PlayFootstepSound()
+{
+	// Chon walk hoac run sound dua tren Speed.
+	// Footstep la cosmetic - chay local moi client (anim notify tu fire moi may).
+	USoundBase* Snd = (Speed >= RunSoundSpeedThreshold && FootstepRunSound)
+		? FootstepRunSound
+		: FootstepWalkSound;
+
+	if (!Snd) return;
+
+	// Spawn 2D location-based de stereo dung huong (vi du nguoi choi nghe footstep enemy o ben trai).
+	UGameplayStatics::PlaySoundAtLocation(this, Snd, GetActorLocation(), FootstepVolume);
+}
+
+void ANBCharacter::PlayUltimateSound()
+{
+	if (!UltimateSound) return;
+	UGameplayStatics::PlaySoundAtLocation(this, UltimateSound, GetActorLocation());
+}
+
 // =========================================================
 // Throw Fall + GetUp flow
 // =========================================================
@@ -1597,6 +1667,13 @@ void ANBCharacter::Landed(const FHitResult& Hit)
 	if (UCharacterMovementComponent* Mv = GetCharacterMovement())
 	{
 		Mv->StopMovementImmediately();
+	}
+
+	// Spawn impact FX + sound tai chan victim (dust/dirt landing).
+	if (FallFaceImpactFX || FallFaceImpactSound)
+	{
+		const FVector ImpactLocation = GetActorLocation() - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+		Multicast_SpawnImpactFX(FallFaceImpactFX, FallFaceImpactSound, ImpactLocation);
 	}
 
 	// Play FallFace (multicast forced - khong skip owner vi victim dang stun).

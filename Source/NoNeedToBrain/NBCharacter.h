@@ -12,6 +12,8 @@ class UInputAction;
 class UAnimMontage;
 class UNBUltimateAbility;
 class UNBHealthComponent;
+class UNiagaraSystem;
+class USoundBase;
 
 UENUM(BlueprintType)
 enum class ECombatState : uint8
@@ -204,6 +206,23 @@ public:
 	/** Multicast play montage tren tat ca clients KHONG SKIP owner (cho Ultimate va action khong client-predict). */
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_PlayMontageForced(UAnimMontage* Montage);
+
+	/** Multicast spawn FX + Sound tai mot vi tri tren tat ca clients (server-authoritative). */
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_SpawnImpactFX(UNiagaraSystem* FX, USoundBase* Sound, FVector Location);
+
+	// =========================================================
+	// Sound API (BlueprintCallable de Anim Notify goi)
+	// =========================================================
+
+	/** Phat 1 footstep sound tai chan. Tu chon walk/run dua tren toc do hien tai.
+	 *  Goi tu Anim Notify tai frame chan cham dat. */
+	UFUNCTION(BlueprintCallable, Category = "Sound")
+	void PlayFootstepSound();
+
+	/** Phat 1 ultimate sound (random tu list). Goi khi cast ulti. */
+	UFUNCTION(BlueprintCallable, Category = "Sound")
+	void PlayUltimateSound();
 
 protected:
 	virtual void BeginPlay() override;
@@ -521,6 +540,62 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Combat|Ragdoll")
 	TObjectPtr<UAnimMontage> GetUpMontage = nullptr;
+
+	// =========================================================
+	// FX / Sound (impact effects)
+	// =========================================================
+
+	/** Niagara FX khi punch trung victim (spawn tai diem va cham). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|FX")
+	TObjectPtr<UNiagaraSystem> PunchHitFX = nullptr;
+
+	/** Niagara FX khi kick trung victim. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|FX")
+	TObjectPtr<UNiagaraSystem> KickHitFX = nullptr;
+
+	/** Niagara FX khi victim cham dat sau bi throw (dust/impact). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|FX")
+	TObjectPtr<UNiagaraSystem> FallFaceImpactFX = nullptr;
+
+	// =========================================================
+	// Sound (mp3/wav per character - single sound moi loai)
+	// =========================================================
+
+	/** Sound khi punch trung. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound")
+	TObjectPtr<USoundBase> PunchHitSound = nullptr;
+
+	/** Sound khi kick trung. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound")
+	TObjectPtr<USoundBase> KickHitSound = nullptr;
+
+	/** Sound khi bi danh trung (victim phat). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound")
+	TObjectPtr<USoundBase> GetHitSound = nullptr;
+
+	/** Sound khi cham dat sau throw. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound")
+	TObjectPtr<USoundBase> FallFaceImpactSound = nullptr;
+
+	/** Sound khi cast ultimate. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound")
+	TObjectPtr<USoundBase> UltimateSound = nullptr;
+
+	/** Sound footstep khi walk (toc do cham). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound|Footstep")
+	TObjectPtr<USoundBase> FootstepWalkSound = nullptr;
+
+	/** Sound footstep khi run (toc do nhanh, thuong nang hon walk). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound|Footstep")
+	TObjectPtr<USoundBase> FootstepRunSound = nullptr;
+
+	/** Speed threshold de phan biet walk vs run. Speed >= nguong nay -> dung FootstepRunSound. */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound|Footstep")
+	float RunSoundSpeedThreshold = 400.f;
+
+	/** Volume multiplier chung cho footstep (0-1). */
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|Sound|Footstep", meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	float FootstepVolume = 1.f;
 
 	// =========================================================
 	// Ultimate

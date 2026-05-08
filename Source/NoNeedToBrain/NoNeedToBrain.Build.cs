@@ -20,7 +20,10 @@ public class NoNeedToBrain : ModuleRules
 			"UMG",
 			"Slate",
 			"NavigationSystem",
-			"GameplayTasks"
+			"GameplayTasks",
+			"SlateCore",
+            		"Niagara",
+            		"NiagaraCore"
 
 		});
 
