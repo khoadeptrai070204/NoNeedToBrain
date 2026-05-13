@@ -1,6 +1,7 @@
 #include "NBPlayerController.h"
 #include "NBCharacter.h"
 #include "NBEndScreenWidget.h"
+#include "NBGameInstance.h"
 #include "Blueprint/UserWidget.h"
 #include "Net/UnrealNetwork.h"
 
@@ -18,9 +19,37 @@ void ANBPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 void ANBPlayerController::Server_SetSelectedHero_Implementation(TSubclassOf<ANBCharacter> InHeroClass)
 {
 	SelectedHeroClass = InHeroClass;
-
 	UE_LOG(LogTemp, Warning, TEXT("[PlayerController] Server received hero selection: %s"),
 		InHeroClass ? *InHeroClass->GetName() : TEXT("None"));
+}
+
+void ANBPlayerController::OnPossess(APawn* InPawn)
+{
+	Super::OnPossess(InPawn);
+
+	// Chi local controller moi can set input mode.
+	if (!IsLocalController()) return;
+
+	// Doc SavedInputModeValue tu GameInstance de apply dung input mode vao game.
+	UNBGameInstance* GI = GetGameInstance<UNBGameInstance>();
+	const uint8 InputModeValue = GI ? GI->SavedInputModeValue : 0;
+
+	if (InputModeValue == 1)
+	{
+		// Gamepad: an cursor, game input mode.
+		bShowMouseCursor = false;
+		FInputModeGameOnly GameMode;
+		SetInputMode(GameMode);
+		UE_LOG(LogTemp, Log, TEXT("[PC] OnPossess: applying Gamepad input mode"));
+	}
+	else
+	{
+		// Mouse + Keyboard (default): hien cursor khi can, game input mode.
+		bShowMouseCursor = false;
+		FInputModeGameOnly GameMode;
+		SetInputMode(GameMode);
+		UE_LOG(LogTemp, Log, TEXT("[PC] OnPossess: applying Mouse+KB input mode"));
+	}
 }
 
 // =========================================================
