@@ -425,11 +425,13 @@ void ANBCharacter::Input_Ultimate(const FInputActionValue&)
 
 void ANBCharacter::Input_SprintPressed(const FInputActionValue&)
 {
+	bWantsToSprint = true;
 	Server_SetSprinting(true);
 }
 
 void ANBCharacter::Input_SprintReleased(const FInputActionValue&)
 {
+	bWantsToSprint = false;
 	Server_SetSprinting(false);
 }
 
